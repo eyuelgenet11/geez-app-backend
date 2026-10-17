@@ -23,15 +23,30 @@ const app = express();
 // Security HTTP headers
 app.use(helmet());
 
-// Rate Limiter: Max 100 API requests per 15 minutes per IP address
+// Rate Limiter: General API requests (100 per 15 minutes per IP)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 100,
-  message: { success: false, message: 'Too many requests from this IP, please try again later.' }
+  message: { success: false, message: 'Too many requests from this IP, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 app.use('/api/', limiter);
 
-app.use(express.json());
+// Strict Brute-Force Rate Limiter for Auth (10 attempts per 15 min per IP)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, message: 'Too many authentication attempts. Please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/login', authLimiter);
+app.use('/api/register', authLimiter);
+
+// Payload size caps: Prevent memory exhaustion / memory-bomb attacks
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(require('cors')());
 
 app.use((req, res, next) => {
@@ -64,7 +79,14 @@ const supabaseAdmin = createClient(
 // Auth Middleware (Verifies Supabase JWT for protected routes)
 const { requireAuth, optionalAuth } = require('./middleware/auth');
 
-const upload = multer({ storage: multer.memoryStorage() });
+// Multer file upload configuration with strict 25 MB memory guard
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25 MB max per file
+    files: 5,
+  },
+});
 
 // --- FIREBASE ADMIN INITIALIZATION ---
 try {
@@ -1743,6 +1765,30 @@ app.post('/api/admin/settlements/generate-z-report', async (req, res) => {
     console.error("Z-Report Error:", error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// 404 Handler for undefined routes
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: 'Resource not found' });
+});
+
+// Centralized Error Handling Middleware (Shields internal stack traces in production)
+app.use((err, req, res, next) => {
+  console.error(`[SERVER ERROR] ${req.method} ${req.url}:`, err);
+  
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ success: false, message: 'File is too large. Maximum allowed size is 25 MB.' });
+    }
+    return res.status(400).json({ success: false, message: err.message });
+  }
+
+  const isProd = process.env.NODE_ENV === 'production';
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    success: false,
+    message: isProd && status === 500 ? 'An unexpected server error occurred.' : (err.message || 'Internal server error'),
+  });
 });
 
 const PORT = process.env.PORT || 5000;
