@@ -44,6 +44,15 @@ app.get(['/health', '/api/health'], (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
+// Public Client Config (Serves Supabase URL and Anon Key dynamically)
+app.get('/api/config/public', (req, res) => {
+  res.status(200).json({
+    success: true,
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+  });
+});
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 // Service-role client: bypasses RLS for trusted server-side operations
