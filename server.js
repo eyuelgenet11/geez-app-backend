@@ -1337,7 +1337,7 @@ app.post('/api/jobs/upload-url', requireAuth, async (req, res) => {
     }
 
     const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `jobs/${req.userId}/${Date.now()}_${safeName}`;
+    const storagePath = `jobs/${req.userId}/${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${safeName}`;
 
     // Create signed upload URL on Supabase storage bucket 'translations'
     const { data, error } = await supabaseAdmin.storage
