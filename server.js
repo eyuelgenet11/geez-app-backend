@@ -818,6 +818,40 @@ File: ${fileUrl}`;
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/telegram/send
+// Proxies Telegram messages securely without exposing bot tokens on mobile devices
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/telegram/send', async (req, res) => {
+  try {
+    const { text, documentUrl, inlineKeyboard } = req.body;
+    if (!text) {
+      return res.status(400).json({ success: false, message: 'text is required' });
+    }
+
+    res.json({ success: true, message: 'Telegram message queued' });
+
+    (async () => {
+      try {
+        if (inlineKeyboard && Array.isArray(inlineKeyboard)) {
+          await sendTelegramMessageWithButtons(text, inlineKeyboard);
+        } else {
+          await sendTelegramMessage(text);
+        }
+
+        if (documentUrl) {
+          await sendTelegramDocument(documentUrl, 'Document Attachment');
+        }
+      } catch (err) {
+        console.error('[TELEGRAM PROXY ERROR]', err.message);
+      }
+    })();
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/payments/verify-and-update
 // Customer submits transaction reference and/or receipt screenshot
