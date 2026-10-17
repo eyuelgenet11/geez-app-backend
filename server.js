@@ -793,13 +793,22 @@ File: ${filePublicUrl}`;
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/jobs/notify-telegram', async (req, res) => {
   try {
-    const { jobId, merchantName, fromLang, toLang, pages, urgency, isHandwritten, customerPhone, fileUrl, fileName, deliveryType } = req.body;
+    const { jobId, merchantName, fromLang, toLang, pages, urgency, isHandwritten, customerPhone, fileUrl, fileUrls, fileName, deliveryType } = req.body;
+
+    const rawUrls = (fileUrls && Array.isArray(fileUrls) && fileUrls.length > 0)
+      ? fileUrls
+      : (fileUrl ? (typeof fileUrl === 'string' && fileUrl.includes(',') ? fileUrl.split(',').map(s => s.trim()) : [fileUrl]) : []);
+    const allUrls = rawUrls.filter(u => u && typeof u === 'string' && u.trim().length > 0);
 
     const handwrittenLine = (isHandwritten === true || isHandwritten === 'true') ? '\nType: Handwritten' : '';
     const selectedMerchant = merchantName || 'General Marketplace';
     const nameStr = fileName || 'Document File';
     const delivery = deliveryType || 'Soft Copy';
     const deliveryLine = `\nDelivery: ${delivery}`;
+
+    const filesSection = allUrls.length > 1
+      ? `Files (${allUrls.length}):\n${allUrls.map((u, i) => `  ${i + 1}. ${u}`).join('\n')}`
+      : `File: ${allUrls[0] || fileUrl || 'N/A'}`;
 
     const adminMessage =
 `[NEW ORDER - ADMIN]
@@ -808,14 +817,14 @@ Language: ${fromLang || 'N/A'} -> ${toLang || 'N/A'}
 Pages: ${pages || 1}
 Phone: ${customerPhone || 'N/A'}
 Urgency: ${urgency || 'Normal'}${deliveryLine}${handwrittenLine}
-File: ${fileUrl}`;
+${filesSection}`;
 
     const translatorMessage =
 `[NEW ORDER - TRANSLATOR]
 Language: ${fromLang || 'N/A'} -> ${toLang || 'N/A'}
 Pages: ${pages || 1}
 Urgency: ${urgency || 'Normal'}${deliveryLine}${handwrittenLine}
-File: ${fileUrl}`;
+${filesSection}`;
 
     // Immediately respond to caller so mobile app does not wait on Telegram network roundtrips
     res.json({ success: true, message: 'Dual Telegram notifications queued.' });
@@ -837,8 +846,11 @@ File: ${fileUrl}`;
         // Send forwardable translator copy
         await sendTelegramMessage(translatorMessage);
 
-        if (fileUrl) {
-          await sendTelegramDocument(fileUrl, `Document: ${nameStr}`);
+        for (let i = 0; i < allUrls.length; i++) {
+          const caption = allUrls.length > 1
+            ? `Document (${i + 1}/${allUrls.length}): ${nameStr}`
+            : `Document: ${nameStr}`;
+          await sendTelegramDocument(allUrls[i], caption);
         }
       } catch (bgErr) {
         console.error('[notify-telegram BG ERROR]', bgErr.message);
@@ -856,10 +868,15 @@ File: ${fileUrl}`;
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/api/telegram/send', async (req, res) => {
   try {
-    const { text, documentUrl, inlineKeyboard } = req.body;
+    const { text, documentUrl, documentUrls, inlineKeyboard } = req.body;
     if (!text) {
       return res.status(400).json({ success: false, message: 'text is required' });
     }
+
+    const rawDocs = (documentUrls && Array.isArray(documentUrls) && documentUrls.length > 0)
+      ? documentUrls
+      : (documentUrl ? [documentUrl] : []);
+    const allDocs = rawDocs.filter(u => u && typeof u === 'string' && u.trim().length > 0);
 
     res.json({ success: true, message: 'Telegram message queued' });
 
@@ -871,8 +888,11 @@ app.post('/api/telegram/send', async (req, res) => {
           await sendTelegramMessage(text);
         }
 
-        if (documentUrl) {
-          await sendTelegramDocument(documentUrl, 'Document Attachment');
+        for (let i = 0; i < allDocs.length; i++) {
+          const caption = allDocs.length > 1
+            ? `Attachment (${i + 1}/${allDocs.length})`
+            : 'Document Attachment';
+          await sendTelegramDocument(allDocs[i], caption);
         }
       } catch (err) {
         console.error('[TELEGRAM PROXY ERROR]', err.message);
@@ -1277,6 +1297,7 @@ app.post('/api/jobs/create', requireAuth, async (req, res) => {
   try {
     const {
       fileUrl,
+      fileUrls,
       fromLang,
       toLang,
       pageCount,
@@ -1293,6 +1314,12 @@ app.post('/api/jobs/create', requireAuth, async (req, res) => {
     if (!fileUrl || !fromLang || !toLang) {
       return res.status(400).json({ success: false, message: 'fileUrl, fromLang, and toLang are required' });
     }
+
+    // Extract all file URLs (supports array or comma-separated string)
+    const rawUrls = (fileUrls && Array.isArray(fileUrls) && fileUrls.length > 0)
+      ? fileUrls
+      : (fileUrl ? (typeof fileUrl === 'string' && fileUrl.includes(',') ? fileUrl.split(',').map(s => s.trim()) : [fileUrl]) : []);
+    const allUrls = rawUrls.filter(u => u && typeof u === 'string' && u.trim().length > 0);
 
     const pages = parseInt(pageCount, 10) || 1;
     const handwritten = isHandwritten === true || isHandwritten === 'true';
@@ -1349,7 +1376,7 @@ app.post('/api/jobs/create', requireAuth, async (req, res) => {
       client_id: req.userId,
       from_lang: fromLang,
       to_lang: toLang,
-      file_url: fileUrl,
+      file_url: allUrls.length > 0 ? allUrls.join(',') : fileUrl,
       status: handwritten ? 'Awaiting Review' : 'pending',
       price: finalPrice,
       page_count: pages,
@@ -1379,6 +1406,10 @@ app.post('/api/jobs/create', requireAuth, async (req, res) => {
 
     // Telegram Admin Notification
     const selectedMerchant = merchantName || 'General Marketplace';
+    const filesSection = allUrls.length > 1
+      ? `Files (${allUrls.length}):\n${allUrls.map((u, i) => `  ${i + 1}. ${u}`).join('\n')}`
+      : `File: ${allUrls[0] || fileUrl || 'N/A'}`;
+
     const adminMsg = `[NEW ORDER - ADMIN]
 Merchant: ${selectedMerchant}
 Language: ${fromLang} -> ${toLang}
@@ -1387,7 +1418,7 @@ Price: ${finalPrice.toFixed(2)} ETB
 Urgency: ${urgency || 'Normal'}
 Delivery: ${delivery}${handwritten ? '\nType: Handwritten' : ''}
 Phone: ${phone || 'N/A'}
-File: ${fileUrl}`;
+${filesSection}`;
 
     // Return response to mobile client immediately (DB row created)
     res.json({ success: true, data: job });
@@ -1406,8 +1437,12 @@ File: ${fileUrl}`;
           await sendTelegramMessage(adminMsg);
         }
 
-        if (fileUrl) {
-          await sendTelegramDocument(fileUrl, `Document for Order #${job.id}`);
+        // Send every attached file/image to Telegram
+        for (let i = 0; i < allUrls.length; i++) {
+          const caption = allUrls.length > 1
+            ? `Document (${i + 1}/${allUrls.length}) for Order #${job.id}`
+            : `Document for Order #${job.id}`;
+          await sendTelegramDocument(allUrls[i], caption);
         }
       } catch (tgErr) {
         console.error('[TELEGRAM BG ERROR]', tgErr.message);
