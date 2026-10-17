@@ -167,7 +167,7 @@ const sendTelegramMessage = async (text) => {
         chat_id: chatId,
         text,
         parse_mode: 'HTML',
-        disable_web_page_preview: false,
+        disable_web_page_preview: true,
       }),
     });
     const result = await response.json();
@@ -183,6 +183,7 @@ const sendTelegramMessage = async (text) => {
         body: JSON.stringify({
           chat_id: chatId,
           text: plainText,
+          disable_web_page_preview: true,
         }),
       });
     }
@@ -209,7 +210,7 @@ const sendTelegramMessageWithButtons = async (text, inlineKeyboard) => {
         chat_id: chatId,
         text,
         parse_mode: 'HTML',
-        disable_web_page_preview: false,
+        disable_web_page_preview: true,
         reply_markup: { inline_keyboard: inlineKeyboard },
       }),
     });
@@ -225,6 +226,7 @@ const sendTelegramMessageWithButtons = async (text, inlineKeyboard) => {
         body: JSON.stringify({
           chat_id: chatId,
           text: plainText,
+          disable_web_page_preview: true,
           reply_markup: { inline_keyboard: inlineKeyboard },
         }),
       });
@@ -234,31 +236,113 @@ const sendTelegramMessageWithButtons = async (text, inlineKeyboard) => {
   }
 };
 
-// Helper to send the actual document file directly to Telegram chat
-const sendTelegramDocument = async (fileUrl, caption) => {
+// Helper to detect if a file URL is an image
+const isImageUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  return /\.(jpe?g|png|webp|heic|bmp)($|\?)/i.test(url);
+};
+
+// Helper to send the actual file (Photo or Document) directly to Telegram chat
+const sendTelegramAttachment = async (fileUrl, caption) => {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
-  if (!botToken || !chatId) return;
+  if (!botToken || !chatId || !fileUrl) return;
+
+  const isImg = isImageUrl(fileUrl);
+  const endpoint = isImg ? 'sendPhoto' : 'sendDocument';
+  const paramKey = isImg ? 'photo' : 'document';
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        document: fileUrl,
-        caption: caption || '📎 Customer Document File',
+        [paramKey]: fileUrl,
+        caption: caption || (isImg ? '📷 Document Photo' : '📎 Document File'),
       }),
     });
     const result = await response.json();
     if (result.ok) {
-      console.log('[TELEGRAM] Document file attached and sent to admin.');
+      console.log(`[TELEGRAM] ${isImg ? 'Photo' : 'Document'} attachment sent to admin.`);
+      return;
+    }
+    console.warn(`[TELEGRAM] ${endpoint} URL upload failed (${result.description}). Retrying with binary upload...`);
+
+    // Fallback: fetch file buffer directly and upload via FormData
+    const fileRes = await fetch(fileUrl);
+    if (!fileRes.ok) throw new Error(`Failed to fetch file from storage: ${fileRes.statusText}`);
+    const arrayBuffer = await fileRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const filename = fileUrl.split('/').pop().split('?')[0] || (isImg ? 'image.jpg' : 'document.pdf');
+
+    const formData = new FormData();
+    formData.append('chat_id', chatId);
+    formData.append(paramKey, new Blob([buffer]), filename);
+    if (caption) formData.append('caption', caption);
+
+    const streamResponse = await fetch(`https://api.telegram.org/bot${botToken}/${endpoint}`, {
+      method: 'POST',
+      body: formData,
+    });
+    const streamResult = await streamResponse.json();
+    if (streamResult.ok) {
+      console.log(`[TELEGRAM] Binary upload succeeded for ${filename}`);
     } else {
-      console.error('[TELEGRAM] Failed to send document file:', result.description);
+      console.error(`[TELEGRAM] Binary upload failed: ${streamResult.description}`);
     }
   } catch (err) {
-    console.error('[TELEGRAM] Error sending document file:', err.message);
+    console.error('[TELEGRAM] Error sending attachment:', err.message);
+  }
+};
+
+// Alias for backwards compatibility
+const sendTelegramDocument = sendTelegramAttachment;
+
+// Helper to send multiple attachments (smart album for photos, individual documents for files)
+const sendTelegramAttachments = async (urls, orderId, nameStr) => {
+  if (!urls || urls.length === 0) return;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  if (!botToken || !chatId) return;
+
+  const validUrls = urls.filter(u => u && typeof u === 'string' && u.trim().length > 0);
+  if (validUrls.length === 0) return;
+
+  const allImages = validUrls.every(u => isImageUrl(u));
+
+  // If 2 to 10 photos: send as native Telegram photo album (MediaGroup)
+  if (allImages && validUrls.length >= 2 && validUrls.length <= 10) {
+    try {
+      const media = validUrls.map((url, i) => ({
+        type: 'photo',
+        media: url,
+        caption: i === 0 ? `📸 Order #${orderId || ''} (${validUrls.length} photos attached)` : undefined,
+      }));
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMediaGroup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, media }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        console.log(`[TELEGRAM] MediaGroup album of ${validUrls.length} photos delivered.`);
+        return;
+      }
+      console.warn('[TELEGRAM] MediaGroup failed, falling back to individual attachments:', data.description);
+    } catch (e) {
+      console.error('[TELEGRAM] MediaGroup error:', e.message);
+    }
+  }
+
+  // Otherwise, send each attachment individually
+  for (let i = 0; i < validUrls.length; i++) {
+    const isImg = isImageUrl(validUrls[i]);
+    const caption = validUrls.length > 1
+      ? `${isImg ? '📷 Photo' : '📎 Document'} (${i + 1}/${validUrls.length}) for Order #${orderId || ''} ${nameStr ? `(${nameStr})` : ''}`
+      : `${isImg ? '📷 Photo' : '📎 Document'} for Order #${orderId || ''} ${nameStr ? `(${nameStr})` : ''}`;
+    await sendTelegramAttachment(validUrls[i], caption.trim());
   }
 };
 
@@ -761,8 +845,8 @@ File: ${filePublicUrl}`;
     // Send the anonymized forward copy for the translator
     await sendTelegramMessage(translatorTelegramMessage);
 
-    // Send the actual file attachment to Telegram chat
-    await sendTelegramDocument(filePublicUrl, `Document: ${file.originalname}`);
+    // Send the actual file attachment(s) to Telegram chat
+    await sendTelegramAttachments([filePublicUrl], job.id, file.originalname);
 
     // ── STEP 6: Return job to Flutter ────────────────
     res.json({
@@ -846,12 +930,8 @@ ${filesSection}`;
         // Send forwardable translator copy
         await sendTelegramMessage(translatorMessage);
 
-        for (let i = 0; i < allUrls.length; i++) {
-          const caption = allUrls.length > 1
-            ? `Document (${i + 1}/${allUrls.length}): ${nameStr}`
-            : `Document: ${nameStr}`;
-          await sendTelegramDocument(allUrls[i], caption);
-        }
+        // Send all attached files or photos (native photo album if images, or documents)
+        await sendTelegramAttachments(allUrls, jobId, nameStr);
       } catch (bgErr) {
         console.error('[notify-telegram BG ERROR]', bgErr.message);
       }
@@ -888,12 +968,8 @@ app.post('/api/telegram/send', async (req, res) => {
           await sendTelegramMessage(text);
         }
 
-        for (let i = 0; i < allDocs.length; i++) {
-          const caption = allDocs.length > 1
-            ? `Attachment (${i + 1}/${allDocs.length})`
-            : 'Document Attachment';
-          await sendTelegramDocument(allDocs[i], caption);
-        }
+        // Deliver all attachments
+        await sendTelegramAttachments(allDocs, '', '');
       } catch (err) {
         console.error('[TELEGRAM PROXY ERROR]', err.message);
       }
@@ -1437,13 +1513,8 @@ ${filesSection}`;
           await sendTelegramMessage(adminMsg);
         }
 
-        // Send every attached file/image to Telegram
-        for (let i = 0; i < allUrls.length; i++) {
-          const caption = allUrls.length > 1
-            ? `Document (${i + 1}/${allUrls.length}) for Order #${job.id}`
-            : `Document for Order #${job.id}`;
-          await sendTelegramDocument(allUrls[i], caption);
-        }
+        // Send all attached files or photos directly to Telegram
+        await sendTelegramAttachments(allUrls, job.id, '');
       } catch (tgErr) {
         console.error('[TELEGRAM BG ERROR]', tgErr.message);
       }
