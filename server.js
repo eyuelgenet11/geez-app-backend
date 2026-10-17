@@ -456,11 +456,37 @@ app.patch('/api/profile', requireAuth, async (req, res) => {
 
 // --- TRANSLATION SERVICES ---
 
-// Get All Companies (Connects to home_screen.dart)
+// Get All Companies / Translators (Connects to home_screen.dart)
 app.get('/api/companies', async (req, res) => {
-  const { data, error } = await supabase.from('companies').select('*');
-  if (error) return res.status(500).json(error);
-  res.json(data);
+  try {
+    const { data: translators, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('role', 'translator');
+
+    if (error) throw error;
+
+    let ratings = [];
+    try {
+      const { data: ratingsData } = await supabaseAdmin
+        .from('translator_ratings_view')
+        .select('*');
+      ratings = ratingsData || [];
+    } catch (_) {}
+
+    const merged = (translators || []).map((t) => {
+      const r = ratings.find((item) => item.translator_id === t.id);
+      return {
+        ...t,
+        avg_rating: r?.average_rating || 5.0,
+        review_count: r?.review_count || 0,
+      };
+    });
+
+    res.json({ success: true, data: merged });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // Upload Document for Translation (Connects to upload_screen.dart)
