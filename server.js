@@ -34,10 +34,14 @@ app.use('/api/', limiter);
 app.use(express.json());
 app.use(require('cors')());
 
-// Global logger to catch connectivity issues
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
+});
+
+// Health check endpoints for warm-up pings & uptime monitors
+app.get(['/health', '/api/health'], (req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
@@ -782,25 +786,33 @@ Pages: ${pages || 1}
 Urgency: ${urgency || 'Normal'}${deliveryLine}${handwrittenLine}
 File: ${fileUrl}`;
 
-    if (isHandwritten === true || isHandwritten === 'true') {
-      await sendTelegramMessageWithButtons(adminMessage, [
-        [
-          { text: 'Accept', callback_data: `accept_${jobId}` },
-          { text: 'Reject', callback_data: `reject_${jobId}` },
-        ]
-      ]);
-    } else {
-      await sendTelegramMessage(adminMessage);
-    }
+    // Immediately respond to caller so mobile app does not wait on Telegram network roundtrips
+    res.json({ success: true, message: 'Dual Telegram notifications queued.' });
 
-    // Send forwardable translator copy
-    await sendTelegramMessage(translatorMessage);
+    // Send notifications in the background
+    (async () => {
+      try {
+        if (isHandwritten === true || isHandwritten === 'true') {
+          await sendTelegramMessageWithButtons(adminMessage, [
+            [
+              { text: 'Accept', callback_data: `accept_${jobId}` },
+              { text: 'Reject', callback_data: `reject_${jobId}` },
+            ]
+          ]);
+        } else {
+          await sendTelegramMessage(adminMessage);
+        }
 
-    if (fileUrl) {
-      await sendTelegramDocument(fileUrl, `Document: ${nameStr}`);
-    }
+        // Send forwardable translator copy
+        await sendTelegramMessage(translatorMessage);
 
-    res.json({ success: true, message: 'Dual Telegram notifications sent.' });
+        if (fileUrl) {
+          await sendTelegramDocument(fileUrl, `Document: ${nameStr}`);
+        }
+      } catch (bgErr) {
+        console.error('[notify-telegram BG ERROR]', bgErr.message);
+      }
+    })();
   } catch (err) {
     console.error('[notify-telegram] Error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -921,16 +933,23 @@ Tap Approve or Reject below:`;
       ]
     ];
 
-    await sendTelegramMessageWithButtons(telegramMessage, inlineKeyboard);
-
-    if (screenshotUrl) {
-      await sendTelegramDocument(screenshotUrl, `Receipt Screenshot - Job #${shortId}`);
-    }
-
+    // Respond to user immediately after database update
     res.json({
       success: true,
       message: 'Payment verification submitted! Admin notified on Telegram.',
     });
+
+    // Send Telegram notification in background
+    (async () => {
+      try {
+        await sendTelegramMessageWithButtons(telegramMessage, inlineKeyboard);
+        if (screenshotUrl) {
+          await sendTelegramDocument(screenshotUrl, `Receipt Screenshot - Job #${shortId}`);
+        }
+      } catch (bgErr) {
+        console.error('[PAYMENT TELEGRAM BG ERROR]', bgErr.message);
+      }
+    })();
 
   } catch (err) {
     console.error('[PAYMENT VERIFY ERROR]', err);
@@ -1305,22 +1324,30 @@ Delivery: ${delivery}${handwritten ? '\nType: Handwritten' : ''}
 Phone: ${phone || 'N/A'}
 File: ${fileUrl}`;
 
-    if (handwritten) {
-      await sendTelegramMessageWithButtons(adminMsg, [
-        [
-          { text: 'Accept', callback_data: `accept_${job.id}` },
-          { text: 'Reject', callback_data: `reject_${job.id}` },
-        ]
-      ]);
-    } else {
-      await sendTelegramMessage(adminMsg);
-    }
-
-    if (fileUrl) {
-      await sendTelegramDocument(fileUrl, `Document for Order #${job.id}`);
-    }
-
+    // Return response to mobile client immediately (DB row created)
     res.json({ success: true, data: job });
+
+    // Send Telegram notifications in background
+    (async () => {
+      try {
+        if (handwritten) {
+          await sendTelegramMessageWithButtons(adminMsg, [
+            [
+              { text: 'Accept', callback_data: `accept_${job.id}` },
+              { text: 'Reject', callback_data: `reject_${job.id}` },
+            ]
+          ]);
+        } else {
+          await sendTelegramMessage(adminMsg);
+        }
+
+        if (fileUrl) {
+          await sendTelegramDocument(fileUrl, `Document for Order #${job.id}`);
+        }
+      } catch (tgErr) {
+        console.error('[TELEGRAM BG ERROR]', tgErr.message);
+      }
+    })();
   } catch (err) {
     console.error('[CREATE JOB UNCAUGHT ERROR]', err.message);
     res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
