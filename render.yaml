@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: geez-app-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID
+        sync: false
+      - key: VERIFIER_API_KEY
+        sync: false
+      - key: OFFICIAL_ACCOUNT_NUMBER
+        sync: false
+      - key: OFFICIAL_ACCOUNT_NAME
+        sync: false
+      - key: SERVICE_FEE_PERCENT
+        value: "20"
