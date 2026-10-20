@@ -59,12 +59,29 @@ app.get(['/health', '/api/health'], (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
-// Public Client Config (Serves Supabase URL and Anon Key dynamically)
+// Public Client Config (Serves Supabase config & App Update metadata dynamically)
 app.get('/api/config/public', (req, res) => {
   res.status(200).json({
     success: true,
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+    latestVersion: process.env.LATEST_APP_VERSION || '1.2.3',
+    minRequiredVersion: process.env.MIN_APP_VERSION || '1.2.0',
+    forceUpdate: process.env.FORCE_UPDATE === 'true',
+    releaseNotes: process.env.RELEASE_NOTES || 'New multi-document uploads, faster camera captures, and stability fixes.',
+    storeUrlAndroid: process.env.STORE_URL_ANDROID || 'https://play.google.com/store/apps/details?id=com.geez.script',
+    storeUrlIos: process.env.STORE_URL_IOS || 'https://apps.apple.com/app/com.geez.script',
+  });
+});
+
+app.get(['/api/app-version', '/api/version'], (req, res) => {
+  res.status(200).json({
+    latestVersion: process.env.LATEST_APP_VERSION || '1.2.3',
+    minRequiredVersion: process.env.MIN_APP_VERSION || '1.2.0',
+    forceUpdate: process.env.FORCE_UPDATE === 'true',
+    releaseNotes: process.env.RELEASE_NOTES || 'New multi-document uploads, faster camera captures, and stability fixes.',
+    storeUrlAndroid: process.env.STORE_URL_ANDROID || 'https://play.google.com/store/apps/details?id=com.geez.script',
+    storeUrlIos: process.env.STORE_URL_IOS || 'https://apps.apple.com/app/com.geez.script',
   });
 });
 
